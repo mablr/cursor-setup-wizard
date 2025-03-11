@@ -7,12 +7,12 @@ readonly SCRIPT_ALIAS_NAME="cursor-setup"
 readonly DOWNLOAD_DIR="$HOME/.AppImage"
 readonly ICON_DIR="$HOME/.local/share/icons"
 readonly USER_DESKTOP_FILE="$HOME/Desktop/cursor.desktop"
-readonly DOWNLOAD_URL="https://downloader.cursor.sh/linux/appImage/x64"
+readonly API_URL="https://www.cursor.com/api/download?platform=linux-x64&releaseTrack=latest"
 readonly ICON_URL="https://mintlify.s3-us-west-1.amazonaws.com/cursor/images/logo/app-logo.svg"
 readonly VERSION_CHECK_TIMEOUT=5 # in seconds | if you have a slow connection, increase this value to 10, 15, or more
 readonly SPINNERS=("meter" "line" "dot" "minidot" "jump" "pulse" "points" "globe" "moon" "monkey" "hamburger")
 readonly SPINNER="${SPINNERS[0]}"
-readonly DEPENDENCIES=("gum" "curl" "wget" "pv" "bc" "find:findutils" "chmod:coreutils" "timeout:coreutils" "mkdir:coreutils" "apparmor_parser:apparmor-utils")
+readonly DEPENDENCIES=("gum" "curl" "wget" "pv" "bc" "find:findutils" "chmod:coreutils" "timeout:coreutils" "mkdir:coreutils" "apparmor_parser:apparmor-utils" "jq:jq")
 readonly GUM_VERSION_REQUIRED="0.14.5"
 readonly SYSTEM_DESKTOP_FILE="$HOME/.local/share/applications/cursor.desktop"
 readonly APPARMOR_PROFILE="/etc/apparmor.d/cursor-appimage"
@@ -40,6 +40,7 @@ remote_name=""
 remote_size=""
 remote_version=""
 remote_md5=""
+download_url=""
 
 # Utility Functions
 validate_os() {
@@ -169,29 +170,45 @@ logg() {
 
 fetch_remote_version() {
   logg prompt "Looking for the latest version online..."
-  headers=$(spinner "Fetching version info from the server..." \
-    "sleep 1 && timeout \"$VERSION_CHECK_TIMEOUT\" wget -S \"$DOWNLOAD_URL\" -q -O /dev/null 2>&1 || true")
-  if [[ -z "$headers" ]]; then
-    logg error "$(echo -e "Failed to fetch headers from the server.\n   • Ensure your internet connection is active and stable.\n   • Ensure that 'VERSION_CHECK_TIMEOUT' ($VERSION_CHECK_TIMEOUT sec) is set high enough to retrieve the headers.\n   • Also, verify if 'DOWNLOAD_URL' is correct: $DOWNLOAD_URL.\n\n ")"
+  local api_response
+  if ! api_response=$(spinner "Fetching version info from the API..." \
+    "timeout \"$VERSION_CHECK_TIMEOUT\" curl -s \"$API_URL\""); then
+    logg error "$(echo -e "Failed to fetch data from the API server.\n   • Ensure your internet connection is active and stable.\n   • Ensure that 'VERSION_CHECK_TIMEOUT' ($VERSION_CHECK_TIMEOUT sec) is set high enough.\n   • Also, verify if 'API_URL' is correct: $API_URL.\n\n ")"
+    return 1
+  fi
+    if ! command -v jq &> /dev/null; then
+    logg error "jq is required to parse JSON response but it's not installed. Please install jq and try again."
+    return 1
+  fi
+  download_url=$(echo "$api_response" | jq -r '.downloadUrl')
+  if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+    logg error "Failed to extract download URL from API response. Response: $api_response"
     return 1
   fi
   logg success "Latest version details retrieved successfully."
-  remote_name=$(echo "$headers" | grep -oE 'filename="[^"]+"' | sed 's/filename=//g; s/\"//g') || remote_name=""
+  headers=$(spinner "Fetching file details..." \
+    "timeout \"$VERSION_CHECK_TIMEOUT\" wget -S \"$download_url\" -q -O /dev/null 2>&1 || true")
+  
+  if [[ -z "$headers" ]]; then
+    logg error "$(echo -e "Failed to fetch file details from the download server.\n   • Ensure your internet connection is active and stable.\n   • Check if the download URL is accessible: $download_url\n\n ")"
+    return 1
+  fi
+  remote_name=$(basename "$download_url")
   remote_size=$(echo "$headers" | grep -oE 'Content-Length: [0-9]+' | sed 's/Content-Length: //') || remote_size="0"
   remote_version=$(extract_version "$remote_name")
   remote_md5=$(echo "$headers" | grep -oE 'ETag: "[^"]+"' | sed 's/ETag: //; s/"//g' || echo "unknown")
   if [[ -z "$remote_name" ]]; then
-    logg error "Could not fetch the filename info. Please check that the 'DOWNLOAD_URL' variable is correct and try again."
+    logg error "Could not determine the filename from download URL. Please check the API response and try again."
     return 1
   fi
-  logg info "$(echo -e "Latest version online:\n      - name: $remote_name\n      - version: $remote_version\n      - size: $(convert_to_mb "$remote_size")\n      - MD5 Hash: $remote_md5\n")"
+  logg info "$(echo -e "Latest version online:\n      - name: $remote_name\n      - version: $remote_version\n      - size: $(convert_to_mb "$remote_size")\n      - MD5 Hash: $remote_md5\n      - download URL: $download_url\n")"
 }
 
 find_local_version() {
   show_log=${1:-false}
   [[ $show_log == true ]] && spinner "Searching for a local version..." "sleep 2;"
   mkdir -p "$DOWNLOAD_DIR"
-  local_path=$(find "$DOWNLOAD_DIR" -maxdepth 1 -type f -name 'cursor-*.AppImage' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
+  local_path=$(find "$DOWNLOAD_DIR" -maxdepth 1 -type f -name 'Cursor-*.AppImage' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
   if [[ -n "$local_path" ]]; then
     local_name=$(basename "$local_path")
     local_size=$(stat -c %s "$local_path" 2>/dev/null || echo "0")
@@ -217,15 +234,19 @@ download_logo() {
 download_appimage() {
   logg prompt "Starting the download of the latest version..."
   local output_document="$DOWNLOAD_DIR/$remote_name"
+  if [[ -z "$download_url" ]]; then
+    logg error "Download URL is empty. Please fetch the remote version first."
+    return 1
+  fi
   if command -v pv >/dev/null; then
     if [[ "$remote_size" =~ ^[0-9]+$ ]]; then
-      wget --quiet --content-disposition -O - "$DOWNLOAD_URL" | pv -s "$remote_size" >"$output_document"
+      wget --quiet --content-disposition -O - "$download_url" | pv -s "$remote_size" >"$output_document"
     else
       logg warn "Couldn't determine file size. Proceeding with a standard download."
-      spinner "Downloading AppImage" "wget --quiet --content-disposition --output-document=\"$output_document\" \"$DOWNLOAD_URL\""
+      spinner "Downloading AppImage" "wget --quiet --content-disposition --output-document=\"$output_document\" \"$download_url\""
     fi
   else
-    if ! spinner "Downloading AppImage" "wget --quiet --show-progress --content-disposition --output-document=\"$output_document\" --trust-server-names \"$DOWNLOAD_URL\""; then
+    if ! spinner "Downloading AppImage" "wget --quiet --show-progress --content-disposition --output-document=\"$output_document\" --trust-server-names \"$download_url\""; then
       logg error "AppImage download failed. Please try again."
       return 1
     fi
