@@ -196,12 +196,12 @@ fetch_remote_version() {
   remote_name=$(basename "$download_url")
   remote_size=$(echo "$headers" | grep -oE 'Content-Length: [0-9]+' | sed 's/Content-Length: //') || remote_size="0"
   remote_version=$(extract_version "$remote_name")
-  remote_md5=$(echo "$headers" | grep -oE 'ETag: "[^"]+"' | sed 's/ETag: //; s/"//g' || echo "unknown")
+  remote_hash=$(echo "$headers" | grep -oE 'ETag: "[^"]+"' | sed 's/ETag: //; s/"//g' || echo "unknown")
   if [[ -z "$remote_name" ]]; then
     logg error "Could not determine the filename from download URL. Please check the API response and try again."
     return 1
   fi
-  logg info "$(echo -e "Latest version online:\n      - name: $remote_name\n      - version: $remote_version\n      - size: $(convert_to_mb "$remote_size")\n      - MD5 Hash: $remote_md5\n      - download URL: $download_url\n")"
+  logg info "$(echo -e "Latest version online:\n      - name: $remote_name\n      - version: $remote_version\n      - size: $(convert_to_mb "$remote_size")\n      - Hash: $remote_hash\n      - download URL: $download_url\n")"
 }
 
 find_local_version() {
@@ -213,12 +213,28 @@ find_local_version() {
     local_name=$(basename "$local_path")
     local_size=$(stat -c %s "$local_path" 2>/dev/null || echo "0")
     local_version=$(extract_version "$local_path")
-    local_md5=$(md5sum "$local_path" | cut -d' ' -f1)
-    [[ $show_log == true ]] && logg info "$(printf "Local version found:\n      - name: %s\n      - version: %s\n      - size: %s\n      - MD5 Hash: %s\n      - path: %s\n" "$local_name" "$local_version" "$(convert_to_mb "$local_size")" "$local_md5" "$local_path")"
+    local_hash=$(calculate_etag "$local_path")
+    [[ $show_log == true ]] && logg info "$(printf "Local version found:\n      - name: %s\n      - version: %s\n      - size: %s\n      - Hash: %s\n      - path: %s\n" "$local_name" "$local_version" "$(convert_to_mb "$local_size")" "$local_hash" "$local_path")"
     return 0
   fi
   [[ $show_log == true ]] && logg error "$(echo -e "No local version found in $DOWNLOAD_DIR\n   Go back to the menu and fetch it first.")"
   return 1
+}
+
+calculate_etag() {
+  local chunk_size=5 # Cursor appimage uses 5MB chunks 
+  local file_size=$(du -b "$1" | cut -f 1)
+  local chunks=$((file_size / (chunk_size * 1024 * 1024)))
+  if [[ $((file_size % (chunk_size * 1024 * 1024))) -gt 0 ]]; then 
+    chunks=$((chunks + 1))
+  fi
+  local tmp_file=$(mktemp -t cursor-local-etag.XXXXXXXXXXXXX)
+  for (( chunk=0; chunk<$chunks; chunk++ )); do
+    dd bs=1M count=$chunk_size skip=$((chunk_size * chunk)) if="$1" 2> /dev/null | md5sum >> $tmp_file
+  done
+  local etag=$(echo "$(xxd -r -p "$tmp_file" | md5sum | cut -f 1 -d ' ')"-$chunks)
+  rm "$tmp_file"
+  echo "$etag"
 }
 
 download_logo() {
@@ -340,7 +356,7 @@ menu() {
     case "$option" in
       "$(nostyle "$all_in_one")")
         fetch_remote_version
-        if ! find_local_version || [[ "$local_md5" != "$remote_md5" ]]; then
+        if ! find_local_version || [[ "$local_hash" != "$remote_hash" ]]; then
           download_appimage
           download_logo
           setup_launchers
