@@ -305,6 +305,71 @@ add_cli_command() {
   logg success "$(printf "The 'cursor' command is now ready to use! ✨\n    Here are a few ways to use it:\n      $ cursor                  # Open the Cursor application\n      $ cursor .                # Open the current directory in Cursor\n      $ cursor /some/directory  # Open a specific directory in Cursor\n      $ cursor /path/to/file.py # Open a specific file in Cursor\n")"
 }
 
+uninstall_cursor() {
+  logg prompt "Starting Cursor uninstallation process..."
+  sudo_please
+  local error=false
+  for file_path in "$SYSTEM_DESKTOP_FILE" "$USER_DESKTOP_FILE"; do
+    if [[ -f "$file_path" ]]; then
+      if spinner "Removing desktop launcher: $file_path" "sleep 1 && rm -f \"$file_path\""; then
+        logg success "Removed desktop launcher: $file_path"
+      else
+        logg error "Failed to remove desktop launcher: $file_path"
+        error=true
+      fi
+    fi
+  done
+  if [[ -f "$APPARMOR_PROFILE" ]]; then
+    if spinner "Removing AppArmor profile" "sleep 1 && echo \"$sudo_pass\" | sudo -S rm -f \"$APPARMOR_PROFILE\""; then
+      logg success "Removed AppArmor profile: $APPARMOR_PROFILE"
+    else
+      logg error "Failed to remove AppArmor profile: $APPARMOR_PROFILE"
+      error=true
+    fi
+  fi
+  if [[ -f "/usr/local/bin/cursor" ]]; then
+    if spinner "Removing 'cursor' CLI command" "sleep 1 && echo \"$sudo_pass\" | sudo -S rm -f /usr/local/bin/cursor"; then
+      logg success "Removed 'cursor' CLI command"
+    else
+      logg error "Failed to remove 'cursor' CLI command"
+      error=true
+    fi
+  fi
+  if [[ -f "$ICON_DIR/cursor-icon.svg" ]]; then
+    if spinner "Removing Cursor icon" "sleep 1 && rm -f \"$ICON_DIR/cursor-icon.svg\""; then
+      logg success "Removed Cursor icon: $ICON_DIR/cursor-icon.svg"
+    else
+      logg error "Failed to remove Cursor icon"
+      error=true
+    fi
+  fi
+  if find_local_version false; then
+    if spinner "Removing Cursor AppImage" "sleep 1 && rm -f \"$local_path\""; then
+      logg success "Removed Cursor AppImage: $local_path"
+    else
+      logg error "Failed to remove Cursor AppImage: $local_path"
+      error=true
+    fi
+  fi
+  local alias_command="alias ${SCRIPT_ALIAS_NAME}=\"$SCRIPT_PATH\""
+  for entry in "${RC_FILES[@]}"; do
+    local rc_file="${entry#*:}"
+    if [[ -f "$rc_file" ]] && grep -q "$alias_command" "$rc_file"; then
+      if spinner "Removing alias from $rc_file" "sleep 1 && sed -i '/# This alias runs the Cursor Setup Wizard/,+2d' \"$rc_file\""; then
+        logg success "Removed alias from $rc_file"
+      else
+        logg error "Failed to remove alias from $rc_file"
+        error=true
+      fi
+    fi
+  done
+  if [ "$error" = false ]; then
+    show_balloon "$(echo -e "🧹 Cursor has been completely uninstalled! 👋")"
+  else
+    logg warn "Some components could not be removed. Please check the error messages above."
+  fi
+}
+
 menu() {
   local option
   show_banner
@@ -313,9 +378,10 @@ menu() {
     reconfigure_all=$(gum style --foreground="$CLR_LGT" --bold "Reconfigure All (no online fetch)")
     setup_apparmor=$(gum style --foreground="$CLR_LGT" --bold "Setup AppArmor Profile")
     add_cli_command=$(gum style --foreground="$CLR_LGT" --bold "Add 'cursor' CLI Command (bash/zsh)")
+    uninstall=$(gum style --foreground="$CLR_LGT" --bold "Uninstall Cursor")
     edit_script=$(gum style --foreground="$CLR_LGT" --bold "Edit This Script")
     _exit=$(gum style --foreground="$CLR_LGT" --italic "Exit")
-    option=$(echo -e "$all_in_one\n$reconfigure_all\n$setup_apparmor\n$add_cli_command\n$edit_script\n$_exit" | gum choose --header "🧙 Pick what you'd like to do next:" --header.margin="0 0 0 2" --header.border="rounded" --header.padding="0 2 0 2" --header.italic --header.foreground="$CLR_LGT" --cursor=" ➤ " --cursor.foreground="$CLR_ERR" --cursor.background="$CLR_PRI" --selected.foreground="$CLR_LGT" --selected.background="$CLR_PRI")
+    option=$(echo -e "$all_in_one\n$reconfigure_all\n$setup_apparmor\n$add_cli_command\n$uninstall\n$edit_script\n$_exit" | gum choose --header "🧙 Pick what you'd like to do next:" --header.margin="0 0 0 2" --header.border="rounded" --header.padding="0 2 0 2" --header.italic --header.foreground="$CLR_LGT" --cursor=" ➤ " --cursor.foreground="$CLR_ERR" --cursor.background="$CLR_PRI" --selected.foreground="$CLR_LGT" --selected.background="$CLR_PRI")
     case "$option" in
       "$(nostyle "$all_in_one")")
         fetch_remote_version
@@ -346,6 +412,14 @@ menu() {
       "$(nostyle "$add_cli_command")")
         if find_local_version true; then
           add_cli_command
+        fi
+        ;;
+      "$(nostyle "$uninstall")")
+        if gum confirm "Are you sure you want to uninstall Cursor?" --show-help --prompt.foreground="$CLR_WRN" --selected.background="$CLR_PRI"; then
+          uninstall_cursor
+        else
+          logg info "Uninstallation cancelled."
+          return
         fi
         ;;
       "$(nostyle "$edit_script")")
