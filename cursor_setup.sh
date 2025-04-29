@@ -34,12 +34,12 @@ local_name=""
 local_size=""
 local_version=""
 local_path=""
-local_md5=""
+local_hash=""
 
 remote_name=""
 remote_size=""
 remote_version=""
-remote_md5=""
+remote_hash=""
 download_url=""
 
 # Utility Functions
