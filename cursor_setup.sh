@@ -172,7 +172,7 @@ fetch_remote_version() {
   logg prompt "Looking for the latest version online..."
   local api_response
   if ! api_response=$(spinner "Fetching version info from the API..." \
-    "timeout \"$VERSION_CHECK_TIMEOUT\" curl -s \"$API_URL\""); then
+    "timeout \"$VERSION_CHECK_TIMEOUT\" curl -Ls \"$API_URL\""); then
     logg error "$(echo -e "Failed to fetch data from the API server.\n   • Ensure your internet connection is active and stable.\n   • Ensure that 'VERSION_CHECK_TIMEOUT' ($VERSION_CHECK_TIMEOUT sec) is set high enough.\n   • Also, verify if 'API_URL' is correct: $API_URL.\n\n ")"
     return 1
   fi
@@ -240,7 +240,7 @@ calculate_etag() {
 download_logo() {
   logg prompt "Getting the Cursor logo ready..."
   mkdir -p "$ICON_DIR"
-  if spinner "Downloading the logo..." "sleep 1 && curl -s -o \"$ICON_DIR/cursor-icon.svg\" \"$ICON_URL\""; then
+  if spinner "Downloading the logo..." "sleep 1 && curl -Ls -o \"$ICON_DIR/cursor-icon.svg\" \"$ICON_URL\""; then
     logg success "Logo successfully downloaded to: $ICON_DIR/cursor-icon.svg"
   else
     logg error "Failed to download the logo. Please check your connection."
